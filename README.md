@@ -4,5 +4,5 @@
 - 运行train.py就可以。
 
 # todo
-- 从特征图和tensorboard来看，w的稀疏性问题存疑。
-  - 输出reg_loss看一下
+- 从特征图和tensorboard来看，w的稀疏性问题存疑
+    - 输出reg_loss看一下
