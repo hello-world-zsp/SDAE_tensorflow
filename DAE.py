@@ -6,7 +6,8 @@ from scipy.misc import imsave
 
 class DAE(object):
     def __init__(self, sess, input_size, noise=0, units=20,layer=0, learning_rate=0.01,
-                 n_epoch=100,is_training = True, input_dim = 1,batch_size = 20):
+                 n_epoch=100,is_training = True, input_dim = 1,batch_size = 20,decay=0.95,
+                 summary_handle = None):
 
         self.sess = sess
         self.is_training = is_training
@@ -17,67 +18,119 @@ class DAE(object):
         self.input_size = input_size        # 输入特征数
         self.input_dim = input_dim          # 输入是几通道，rgb是3
 
-        self.lr = learning_rate
-        self.stddev = 0.02                  # 初始化参数用的
+        self.lr_init = learning_rate
+        self.stddev = 0.2                   # 初始化参数用的
         self.noise = noise                  # dropout水平，是数\
+        self.w_scale = 2.0                  # 正则化系数,float
+        self.dropout_p = 0.5                # dropout层保持概率
+        self.lr_decay = decay
+        self.change_lr_epoch = int(n_epoch*0.5) # 开始改变lr的epoch数
 
+        self.summ_handle = summary_handle
         self.build(self.is_training)
 
     # ------------------------- 隐层 -------------------------------------
     def hidden(self, input, units, noise, name = "default"):
+        input_size = int(input.shape[1])
         with tf.variable_scope(name):
             # dropout+fc+lrelu
-            corrupt = tf.layers.dropout(input,rate= noise,training=self.is_training)
-            fc1 = tf.layers.dense(corrupt,units,
-                                 kernel_initializer=tf.random_normal_initializer(stddev=self.stddev),
-                                bias_initializer=tf.constant_initializer(0.0),reuse=not self.is_training)
+            # corrupt = tf.layers.dropout(input,rate= noise,training=self.is_training)
+            corrupt = input
+            ew = tf.get_variable('enc_weights',shape=[input_size, units],
+                            initializer=tf.random_normal_initializer(mean=0.0,stddev=self.stddev),
+                                 regularizer=tf.contrib.layers.l1_regularizer(self.w_scale))
+            sew = tf.summary.histogram(name + '/enc_weights', ew)
+            with tf.variable_scope('enc_biases'):
+                eb = tf.Variable(tf.zeros([1,units],name='b'))
+                seb = tf.summary.histogram(name+'/enc_biases',eb)
+            fc1 = tf.add(tf.matmul(corrupt,ew),eb)
             act1 = lrelu(fc1)               #leaky relu
-            character = tf.layers.batch_normalization(act1)
-            fc = tf.layers.dense(act1, input.shape[1],
-                                 kernel_initializer=tf.random_normal_initializer(stddev=self.stddev),
-                                 bias_initializer=tf.constant_initializer(0.0),reuse=not self.is_training)
-            act = lrelu(fc)
-            out = tf.layers.batch_normalization(act)
-        return character, out
+            # act1 = lrelu(tf.nn.dropout(fc1,self.dropout_p))
+            # character = tf.layers.batch_normalization(act1)
+            character = tf.sigmoid(act1)
+            feature = tf.sigmoid(ew)
+
+
+            dw = tf.get_variable('dec_weights',shape=[units,input_size],
+                            initializer=tf.random_normal_initializer(mean=0.0,stddev=self.stddev),
+                                 regularizer=tf.contrib.layers.l1_regularizer(self.w_scale))
+            sdw = tf.summary.histogram(name + '/dec_weights', dw)
+            with tf.variable_scope('dec_biases'):
+                db = tf.Variable(tf.zeros([1,input_size],name='b'))
+                sdb = tf.summary.histogram(name+'/dec_biases',db)
+            self.summ_handle.add_summ(sew, seb,sdw,sdb)
+            fc = tf.add(tf.matmul(act1,dw),db)
+
+            # act = lrelu(fc)
+            # act = lrelu(tf.nn.dropout(fc, self.dropout_p))
+            # out = tf.layers.batch_normalization(act)
+            out = tf.sigmoid(fc)
+
+            reg_loss = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+        return character, out,feature
 
     def build(self,is_training=True):
-        self.x = tf.placeholder(tf.float32,[self.batch_size,self.input_size],
-                                    name="input")
-        self.character,self.out = self.hidden(self.x,self.units,noise = self.noise,
-                                    name = "hidden_layer" + str(self.layer))
-        self.loss = mse(self.out,self.x)
+        self.x = tf.placeholder(tf.float32,[self.batch_size,self.input_size],name="input")
+        self.lr = tf.placeholder(tf.float32, name='learning_rate')
+        self.character, self.out,self.feature = self.hidden(self.x,self.units,noise = self.noise,
+                                                name = "hidden_layer" + str(self.layer))
+        mse_loss = mse(self.out, self.x)
+        self.loss = mse_loss
 
-    def train(self, x, train_vals,summ_writer, summ_loss):
-        self.optimizer = tf.train.GradientDescentOptimizer(self.lr).minimize(self.loss,var_list=train_vals)
+
+    def train(self, x, train_vals, summ_writer, summ_handle):
+        temp = set(tf.all_variables())
+        self.optimizer = tf.train.AdamOptimizer(self.lr, beta1=0.9).minimize(self.loss,var_list=train_vals)
+        # adam中有slot,需要初始化。
+        tf.initialize_variables(set(tf.all_variables()) - temp).run()
+
         n_batch = x.shape[0] // self.batch_size
         print("num_batch", n_batch)
+        counter = 0
+        current_lr = self.lr_init
+        begin_time = time.time()
         # ------------------------- 训练 ----------------------------------
         for epoch in range(self.n_epoch-1):
+            if epoch > self.change_lr_epoch:
+                current_lr = current_lr * self.lr_decay
             for batch in range(n_batch):
+                counter += 1
                 batch_x = x[batch*self.batch_size:(batch+1)*self.batch_size]
-                _, loss,out,sum_loss_str = self.sess.run([self.optimizer,self.loss,self.out,summ_loss],
-                                                         feed_dict={self.x:batch_x})
-                summ_writer.add_summary(sum_loss_str,epoch*n_batch+batch)
-            print("epoch ",epoch," train loss: ", loss)
+                _, loss, out, summ_loss= self.sess.run([self.optimizer, self.loss, self.out,summ_handle.summ_loss[0]],
+                                    feed_dict={self.x: batch_x, self.lr:current_lr})
+                summ_writer.add_summary(summ_loss,epoch * n_batch + batch)
+                if counter%50==0:
+                # 记录w,b
+                    summ_ew, summ_eb, summ_dw, summ_db = self.sess.run([summ_handle.summ_enc_w[0], summ_handle.summ_enc_b[0],
+                                                                        summ_handle.summ_dec_w[0], summ_handle.summ_dec_b[0]],
+                                                                        feed_dict={self.x: batch_x, self.lr:current_lr})
+                    summ_writer.add_summary(summ_ew, epoch * n_batch + batch)
+                    summ_writer.add_summary(summ_eb, epoch * n_batch + batch)
+                    summ_writer.add_summary(summ_dw, epoch * n_batch + batch)
+                    summ_writer.add_summary(summ_db, epoch * n_batch + batch)
+            print("epoch ",epoch," train loss: ", loss, " time:",str(time.time()-begin_time))
 
-        #----------- 最后一个epoch,除了训练，还要获取下一层训练的特征图 ------
+        #----------- 最后一个epoch,除了训练，还要获取下一层训练的特征图，记录wb的分布 ------
         epoch = self.n_epoch - 1
-        begin = time.time()
         characters = []
         outs = []
         for batch in range(n_batch):
             batch_x = x[batch * self.batch_size:(batch + 1) * self.batch_size]
-            _, loss, out, character,sum_loss_str = self.sess.run([self.optimizer, self.loss, self.out,
-                                                                  self.character,summ_loss],
-                                                                feed_dict={self.x: batch_x})
-            summ_writer.add_summary(sum_loss_str, epoch * n_batch + batch)
+            _, loss, out, character, self.features, summ_loss,summ_ew,summ_eb,summ_dw,summ_db\
+                = self.sess.run([self.optimizer, self.loss, self.out,self.character,self.feature,
+                                summ_handle.summ_loss[0],summ_handle.summ_enc_w[0],summ_handle.summ_enc_b[0],
+                                summ_handle.summ_dec_w[0], summ_handle.summ_dec_b[0]],
+                                feed_dict={self.x: batch_x, self.lr:current_lr})
+            summ_writer.add_summary(summ_loss, epoch * n_batch + batch)
+            summ_writer.add_summary(summ_ew, epoch * n_batch + batch)
+            summ_writer.add_summary(summ_eb, epoch * n_batch + batch)
+            summ_writer.add_summary(summ_dw, epoch * n_batch + batch)
+            summ_writer.add_summary(summ_db, epoch * n_batch + batch)
             characters.append(character)
             outs.append(out)
         self.next_x = np.concatenate(tuple(characters))
         self.rec = np.concatenate(tuple(outs))
-        end = time.time()
-        print("epoch ", epoch, " train loss: ", loss)
-        print("time ",end-begin)
+        print("epoch ", epoch, " train loss: ", loss, " time:",str(time.time()-begin_time))
         # -------------------------------------------------------------------
 
 
