@@ -6,6 +6,7 @@ import os
 
 from utils import *
 from MLP import *
+from MLPrec import *
 from SDAE import *
 from readData import *
 
@@ -16,12 +17,21 @@ flags = tf.app.flags
 sdae_args = {
         "noise"     : .1,
         "n_nodes"   : (225, 100, 49),
-        "learning_rate": .01,
-        "n_epochs"  : 15,
+        "learning_rate": (.01,0.01,0.001),
+        "n_epochs"  : (300, 150, 150),
         "data_dir": 'data',
         "lambda1"   : (.4, .05, .05),
         "batch_size": 50,
         "num_show"  :100
+}
+
+mlp_args = {
+        "noise"     : .1,
+        "n_nodes"   : (225,100),
+        "learning_rate": .001,
+        "n_epochs"  : 200,
+        "data_dir": 'data',
+        "batch_size": 50,
 }
 
 def main():
@@ -34,6 +44,8 @@ def main():
 
     for k in ('learning_rate', 'n_epochs', 'n_nodes', 'noise', 'lambda1'):
         sdae_args[k] = solo_to_tuple(sdae_args[k])
+    for k in ('learning_rate', 'n_epochs', 'n_nodes', 'noise'):
+        mlp_args[k] = solo_to_tuple(mlp_args[k])
     print("Stacked DAE arguments: ")
     for k in sorted(sdae_args.keys()):
         print("\t{:15}: {}".format(k, sdae_args[k]))
@@ -45,14 +57,20 @@ def main():
     # ----------------- 模型初始化 ------------------------
     with tf.Session() as sess:
         print("Initializing...")
-        #mlp = MLP(sess,trainX.shape[1],is_training = True,**sdae_args)  # 一个多FC层的 enc-dec结构的网络
         sdae = SDAE(sess,trainX.shape[1],is_training = True,**sdae_args)
         print("build model...")
-        #mlp.build(is_training = True)
         sdae.build(is_training = True)
         print("training...")
-        #mlp.train(trainX,trainY,valX,valY)
-        sdae.train(trainX,valX)
+        features = sdae.train(trainX,valX,shuffle=False)
+
+        # mlp = MLPrec(sess, trainX.shape[1], is_training=True, **mlp_args)  # 一个多FC层的 enc-dec结构的网络
+        # mlp.build(is_training=True)
+        # mlp.train(trainX)
+
+
+        # mlp = MLP(sess,features.shape[1],is_training = True,**mlp_args)  # 一个多FC层的 enc-dec结构的网络
+        # mlp.build(is_training = True)
+        # mlp.train(features,trainY[:features.shape[0]],valX,valY)
 
 
 if __name__ == '__main__':

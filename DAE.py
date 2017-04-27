@@ -21,10 +21,10 @@ class DAE(object):
         self.lr_init = learning_rate
         self.stddev = 0.2                   # 初始化参数用的
         self.noise = noise                  # dropout水平，是数\
-        self.w_scale = 2.0                  # 正则化系数,float
+        self.reg_lambda = 0.0                  # 正则化系数,float
         self.dropout_p = 0.5                # dropout层保持概率
         self.lr_decay = decay
-        self.change_lr_epoch = int(n_epoch*0.5) # 开始改变lr的epoch数
+        self.change_lr_epoch = int(n_epoch*0.3) # 开始改变lr的epoch数
 
         self.summ_handle = summary_handle
         self.build(self.is_training)
@@ -33,50 +33,58 @@ class DAE(object):
     def hidden(self, input, units, noise, name = "default"):
         input_size = int(input.shape[1])
         with tf.variable_scope(name):
-            # dropout+fc+lrelu
-            # corrupt = tf.layers.dropout(input,rate= noise,training=self.is_training)
-            corrupt = input
+            # mask噪声
+            corrupt = tf.layers.dropout(input,rate= noise,training=self.is_training)
+            # 加性高斯噪声
+            # corrupt = tf.add(input,noise * tf.random_uniform(input.shape))
+            # corrupt = input
             ew = tf.get_variable('enc_weights',shape=[input_size, units],
-                            initializer=tf.random_normal_initializer(mean=0.0,stddev=self.stddev),
-                                 regularizer=tf.contrib.layers.l1_regularizer(self.w_scale))
+                                 initializer=tf.random_normal_initializer(mean=0.0,stddev=self.stddev),
+                                 regularizer=tf.contrib.layers.l2_regularizer(self.reg_lambda))
             sew = tf.summary.histogram(name + '/enc_weights', ew)
-            with tf.variable_scope('enc_biases'):
-                eb = tf.Variable(tf.zeros([1,units],name='b'))
-                seb = tf.summary.histogram(name+'/enc_biases',eb)
+
+            eb = tf.get_variable('enc_biases',shape=[1,units],
+                                initializer=tf.constant_initializer(0.0),dtype=tf.float32,
+                                regularizer=tf.contrib.layers.l2_regularizer(self.reg_lambda))
+            seb = tf.summary.histogram(name+'/enc_biases',eb)
             fc1 = tf.add(tf.matmul(corrupt,ew),eb)
-            act1 = lrelu(fc1)               #leaky relu
-            # act1 = lrelu(tf.nn.dropout(fc1,self.dropout_p))
-            # character = tf.layers.batch_normalization(act1)
-            character = tf.sigmoid(act1)
-            feature = tf.sigmoid(ew)
+            # act1 = lrelu(fc1)               #leaky relu
+            # act1 = tf.nn.relu(tf.layers.batch_normalization(fc1))
+            act1 = tf.nn.sigmoid(tf.layers.batch_normalization(fc1))
+            character = act1
+            self.ew = ew
+            self.eb = eb
 
-
-            dw = tf.get_variable('dec_weights',shape=[units,input_size],
-                            initializer=tf.random_normal_initializer(mean=0.0,stddev=self.stddev),
-                                 regularizer=tf.contrib.layers.l1_regularizer(self.w_scale))
-            sdw = tf.summary.histogram(name + '/dec_weights', dw)
-            with tf.variable_scope('dec_biases'):
-                db = tf.Variable(tf.zeros([1,input_size],name='b'))
-                sdb = tf.summary.histogram(name+'/dec_biases',db)
-            self.summ_handle.add_summ(sew, seb,sdw,sdb)
+            dw = tf.transpose(ew)
+            db = tf.get_variable('dec_biases',shape=[1,input_size],
+                                initializer=tf.constant_initializer(0.0),dtype=tf.float32,
+                                regularizer=tf.contrib.layers.l2_regularizer(self.reg_lambda))
+            sdb = tf.summary.histogram(name+'/dec_biases',db)
+            self.summ_handle.add_summ(sew, seb,sdb)
             fc = tf.add(tf.matmul(act1,dw),db)
 
             # act = lrelu(fc)
             # act = lrelu(tf.nn.dropout(fc, self.dropout_p))
-            # out = tf.layers.batch_normalization(act)
             out = tf.sigmoid(fc)
 
-            reg_loss = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-        return character, out,feature
+        return character, out
 
     def build(self,is_training=True):
+        layer_name = "hidden_layer" + str(self.layer)
         self.x = tf.placeholder(tf.float32,[self.batch_size,self.input_size],name="input")
         self.lr = tf.placeholder(tf.float32, name='learning_rate')
-        self.character, self.out,self.feature = self.hidden(self.x,self.units,noise = self.noise,
-                                                name = "hidden_layer" + str(self.layer))
-        mse_loss = mse(self.out, self.x)
-        self.loss = mse_loss
+        self.character, self.out = self.hidden(self.x,self.units,noise = self.noise,
+                                                name = layer_name)
 
+        reg_losses = tf.losses.get_regularization_losses(layer_name)
+        # reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+        for loss in reg_losses:
+            tf.add_to_collection('losses' + layer_name, loss)
+        self.reg_losses = tf.get_collection('losses'+layer_name)
+
+        mse_loss = mse(self.out, self.x)
+        tf.add_to_collection('losses'+layer_name, mse_loss)
+        self.loss = tf.add_n(tf.get_collection('losses'+layer_name))
 
     def train(self, x, train_vals, summ_writer, summ_handle):
         temp = set(tf.all_variables())
@@ -96,19 +104,19 @@ class DAE(object):
             for batch in range(n_batch):
                 counter += 1
                 batch_x = x[batch*self.batch_size:(batch+1)*self.batch_size]
-                _, loss, out, summ_loss= self.sess.run([self.optimizer, self.loss, self.out,summ_handle.summ_loss[0]],
-                                    feed_dict={self.x: batch_x, self.lr:current_lr})
+                _, loss, reg_loss, out, summ_loss= self.sess.run([self.optimizer, self.loss,self.reg_losses, self.out,
+                                                                 summ_handle.summ_loss[0]],
+                                                                feed_dict={self.x: batch_x, self.lr:current_lr})
                 summ_writer.add_summary(summ_loss,epoch * n_batch + batch)
                 if counter%50==0:
                 # 记录w,b
-                    summ_ew, summ_eb, summ_dw, summ_db = self.sess.run([summ_handle.summ_enc_w[0], summ_handle.summ_enc_b[0],
-                                                                        summ_handle.summ_dec_w[0], summ_handle.summ_dec_b[0]],
+                    summ_ew, summ_eb, summ_db = self.sess.run([summ_handle.summ_enc_w[0], summ_handle.summ_enc_b[0],
+                                                                        summ_handle.summ_dec_b[0]],
                                                                         feed_dict={self.x: batch_x, self.lr:current_lr})
                     summ_writer.add_summary(summ_ew, epoch * n_batch + batch)
                     summ_writer.add_summary(summ_eb, epoch * n_batch + batch)
-                    summ_writer.add_summary(summ_dw, epoch * n_batch + batch)
                     summ_writer.add_summary(summ_db, epoch * n_batch + batch)
-            print("epoch ",epoch," train loss: ", loss, " time:",str(time.time()-begin_time))
+            print("epoch ",epoch," train loss: ", loss," reg loss: ",reg_loss, " time:",str(time.time()-begin_time))
 
         #----------- 最后一个epoch,除了训练，还要获取下一层训练的特征图，记录wb的分布 ------
         epoch = self.n_epoch - 1
@@ -116,15 +124,14 @@ class DAE(object):
         outs = []
         for batch in range(n_batch):
             batch_x = x[batch * self.batch_size:(batch + 1) * self.batch_size]
-            _, loss, out, character, self.features, summ_loss,summ_ew,summ_eb,summ_dw,summ_db\
-                = self.sess.run([self.optimizer, self.loss, self.out,self.character,self.feature,
+            _, loss, out, character, self.ewarray,self.ebarray, summ_loss,summ_ew,summ_eb,summ_db\
+                = self.sess.run([self.optimizer, self.loss, self.out,self.character,self.ew,self.eb,
                                 summ_handle.summ_loss[0],summ_handle.summ_enc_w[0],summ_handle.summ_enc_b[0],
-                                summ_handle.summ_dec_w[0], summ_handle.summ_dec_b[0]],
+                                summ_handle.summ_dec_b[0]],
                                 feed_dict={self.x: batch_x, self.lr:current_lr})
             summ_writer.add_summary(summ_loss, epoch * n_batch + batch)
             summ_writer.add_summary(summ_ew, epoch * n_batch + batch)
             summ_writer.add_summary(summ_eb, epoch * n_batch + batch)
-            summ_writer.add_summary(summ_dw, epoch * n_batch + batch)
             summ_writer.add_summary(summ_db, epoch * n_batch + batch)
             characters.append(character)
             outs.append(out)

@@ -7,14 +7,12 @@ class SummaryHandle():
     def __init__(self):
         self.summ_enc_w = []
         self.summ_enc_b = []
-        self.summ_dec_w = []
         self.summ_dec_b = []
         self.summ_loss = []
 
-    def add_summ(self,e_w,e_b,d_w,d_b):
+    def add_summ(self,e_w,e_b,d_b):
         self.summ_enc_w.append(e_w)
         self.summ_enc_b.append(e_b)
-        self.summ_dec_w.append(d_w)
         self.summ_dec_b.append(d_b)
 
 
@@ -53,8 +51,8 @@ class SDAE(object):
         self.hidden_layers =[]
         self.loss = []
         self.summary_handles = []
-        # self.summary_loss = []
         n_input = [self.input_size]+list(self.n_nodes[:-1])
+
         for i in range(self.n_layers):
             summary_handle = SummaryHandle()
             layer = DAE(self.sess, n_input[i], noise=self.noise[i],units=self.n_nodes[i],
@@ -63,8 +61,8 @@ class SDAE(object):
                         summary_handle = summary_handle)
             self.loss.append(layer.loss)
             self.hidden_layers.append(layer)
+
             # self.summary_character.append(tf.summary.image(layer.next_x, "character" + str(i)))
-            # self.summary_loss.append(tf.summary.scalar('loss',layer.loss))
             summary_handle.summ_loss.append(tf.summary.scalar('loss'+str(i),layer.loss))
             self.summary_handles.append(summary_handle)
 
@@ -101,11 +99,21 @@ class SDAE(object):
 
             save_image(layer.rec,name = self.result_dir+'/rec'+str(idx)+'.png',n_show = self.n_show)
             features.append(layer.next_x)
+            # if idx == 0:
+            #     imgs.append(np.transpose(layer.features))
+            # else:
+            #     imgs.append(np.dot(np.transpose(layer.features),imgs[idx-1]))
+            # save_image(imgs[idx], name=self.result_dir + '/feature' + str(idx) + '.png', n_show=self.n_nodes[idx])
             if idx == 0:
-                imgs.append(np.transpose(layer.features))
+                img = np.add(layer.ewarray.T,
+                                   np.dot(layer.ebarray.T,np.ones([1,self.input_size])))
             else:
-                imgs.append(np.dot(np.transpose(layer.features),imgs[idx-1]))
+                img = np.add(np.dot(layer.ewarray.T,imgs[idx-1]),
+                                   np.dot(layer.ebarray.T, np.ones([1, self.input_size])))
+            img = tf.sigmoid(img).eval()
+            imgs.append(img)
             save_image(imgs[idx], name=self.result_dir + '/feature' + str(idx) + '.png', n_show=self.n_nodes[idx])
+            save_image(tf.sigmoid(layer.next_x).eval(), name=self.result_dir + '/character' + str(idx) + '.png', n_show=self.n_show)
         features = np.concatenate(tuple(features[1:]),axis = 1)
         return features
 
