@@ -37,7 +37,6 @@ class DAE(object):
             corrupt = tf.layers.dropout(input,rate= noise,training=self.is_training)
             # 加性高斯噪声
             # corrupt = tf.add(input,noise * tf.random_uniform(input.shape))
-            # corrupt = input
             ew = tf.get_variable('enc_weights',shape=[input_size, units],
                                  initializer=tf.random_normal_initializer(mean=0.0,stddev=self.stddev),
                                  regularizer=tf.contrib.layers.l2_regularizer(self.reg_lambda))
@@ -77,7 +76,6 @@ class DAE(object):
                                                 name = layer_name)
 
         reg_losses = tf.losses.get_regularization_losses(layer_name)
-        # reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
         for loss in reg_losses:
             tf.add_to_collection('losses' + layer_name, loss)
         self.reg_losses = tf.get_collection('losses'+layer_name)

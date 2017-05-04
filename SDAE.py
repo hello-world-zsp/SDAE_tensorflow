@@ -62,7 +62,6 @@ class SDAE(object):
             self.loss.append(layer.loss)
             self.hidden_layers.append(layer)
 
-            # self.summary_character.append(tf.summary.image(layer.next_x, "character" + str(i)))
             summary_handle.summ_loss.append(tf.summary.scalar('loss'+str(i),layer.loss))
             self.summary_handles.append(summary_handle)
 
@@ -73,8 +72,7 @@ class SDAE(object):
             self.train_vals_layer.append ( [var for var in self.train_vals if str(i) in var.name.split("/")[0]])
         # ------------------------------------------------------------------------------
 
-
-    def train(self,x,valx,shuffle=True):
+    def train(self, x,valx,shuffle=True):
         tf.global_variables_initializer().run()
         self.writer = tf.summary.FileWriter('./'+self.log_dir, self.sess.graph)
 
@@ -90,8 +88,6 @@ class SDAE(object):
         for layer in self.hidden_layers:
             idx = self.hidden_layers.index(layer)
             print("training layer: ",idx )
-            # layer.train(input,self.train_vals_layer[idx],
-            #             summ_writer=self.writer,summ_loss=self.summary_loss[idx])
             layer.train(input, self.train_vals_layer[idx],
                         summ_writer=self.writer, summ_handle=self.summary_handles[idx])
             input = layer.next_x
@@ -99,11 +95,6 @@ class SDAE(object):
 
             save_image(layer.rec,name = self.result_dir+'/rec'+str(idx)+'.png',n_show = self.n_show)
             features.append(layer.next_x)
-            # if idx == 0:
-            #     imgs.append(np.transpose(layer.features))
-            # else:
-            #     imgs.append(np.dot(np.transpose(layer.features),imgs[idx-1]))
-            # save_image(imgs[idx], name=self.result_dir + '/feature' + str(idx) + '.png', n_show=self.n_nodes[idx])
             if idx == 0:
                 img = np.add(layer.ewarray.T,
                                    np.dot(layer.ebarray.T,np.ones([1,self.input_size])))
