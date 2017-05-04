@@ -1,3 +1,4 @@
+# -*- coding: utf8 -*-
 import tensorflow as tf
 from utils import *
 import time
@@ -7,7 +8,7 @@ from scipy.misc import imsave
 class DAE(object):
     def __init__(self, sess, input_size, noise=0, units=20,layer=0, learning_rate=0.01,
                  n_epoch=100,is_training = True, input_dim = 1,batch_size = 20,decay=0.95,
-                 summary_handle = None):
+                 summary_handle = None,load_freq = 20):
 
         self.sess = sess
         self.is_training = is_training
@@ -21,12 +22,13 @@ class DAE(object):
         self.lr_init = learning_rate
         self.stddev = 0.2                   # 初始化参数用的
         self.noise = noise                  # dropout水平，是数\
-        self.reg_lambda = 0.0                  # 正则化系数,float
+        self.reg_lambda = 0.01                  # 正则化系数,float
         self.dropout_p = 0.5                # dropout层保持概率
         self.lr_decay = decay
         self.change_lr_epoch = int(n_epoch*0.3) # 开始改变lr的epoch数
 
         self.summ_handle = summary_handle
+        self.load_freq = load_freq          # 每隔几个batch，读一次或存一次数据
         self.build(self.is_training)
 
     # ------------------------- 隐层 -------------------------------------
@@ -37,6 +39,7 @@ class DAE(object):
             corrupt = tf.layers.dropout(input,rate= noise,training=self.is_training)
             # 加性高斯噪声
             # corrupt = tf.add(input,noise * tf.random_uniform(input.shape))
+            # corrupt = input
             ew = tf.get_variable('enc_weights',shape=[input_size, units],
                                  initializer=tf.random_normal_initializer(mean=0.0,stddev=self.stddev),
                                  regularizer=tf.contrib.layers.l2_regularizer(self.reg_lambda))
@@ -48,7 +51,6 @@ class DAE(object):
             seb = tf.summary.histogram(name+'/enc_biases',eb)
             fc1 = tf.add(tf.matmul(corrupt,ew),eb)
             # act1 = lrelu(fc1)               #leaky relu
-            # act1 = tf.nn.relu(tf.layers.batch_normalization(fc1))
             act1 = tf.nn.sigmoid(tf.layers.batch_normalization(fc1))
             character = act1
             self.ew = ew
@@ -76,15 +78,17 @@ class DAE(object):
                                                 name = layer_name)
 
         reg_losses = tf.losses.get_regularization_losses(layer_name)
+        # reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
         for loss in reg_losses:
             tf.add_to_collection('losses' + layer_name, loss)
         self.reg_losses = tf.get_collection('losses'+layer_name)
 
         mse_loss = mse(self.out, self.x)
-        tf.add_to_collection('losses'+layer_name, mse_loss)
+        cross_entropy_loss = loss_x_entropy(self.out, self.x)
+        tf.add_to_collection('losses'+layer_name,mse_loss)
         self.loss = tf.add_n(tf.get_collection('losses'+layer_name))
 
-    def train(self, x, train_vals, summ_writer, summ_handle):
+    def train(self, x,read_data_path, save_data_path,train_vals, summ_writer, summ_handle, load_data_batch_func=None):
         temp = set(tf.all_variables())
         self.optimizer = tf.train.AdamOptimizer(self.lr, beta1=0.9).minimize(self.loss,var_list=train_vals)
         # adam中有slot,需要初始化。
@@ -101,10 +105,23 @@ class DAE(object):
                 current_lr = current_lr * self.lr_decay
             for batch in range(n_batch):
                 counter += 1
-                batch_x = x[batch*self.batch_size:(batch+1)*self.batch_size]
-                _, loss, reg_loss, out, summ_loss= self.sess.run([self.optimizer, self.loss,self.reg_losses, self.out,
+
+                if load_data_batch_func:
+                    if batch % self.load_freq == 0:
+                        # 每个batch都去读数据,也可以改成每几个batch读一次数据
+                        read_batch_x = load_data_batch_func(read_data_path,start=batch*self.batch_size,
+                                                            batch_size=self.batch_size*self.load_freq)#想按batch读，就需要每层的特征图都存下来，很占空间。
+                        batch_x = read_batch_x[(batch % self.load_freq) * self.batch_size:
+                                           (batch % self.load_freq + 1 ) * self.batch_size]
+                else:
+                    batch_x = x[batch*self.batch_size:(batch+1)*self.batch_size]
+                try :
+                    _, loss, reg_loss, out, summ_loss= self.sess.run([self.optimizer, self.loss,self.reg_losses, self.out,
                                                                  summ_handle.summ_loss[0]],
                                                                 feed_dict={self.x: batch_x, self.lr:current_lr})
+                except:
+                    #print (batch)  # 因为不能整除，最后一个batch没有数据了不管了
+                    pass
                 summ_writer.add_summary(summ_loss,epoch * n_batch + batch)
                 if counter%50==0:
                 # 记录w,b
@@ -120,6 +137,8 @@ class DAE(object):
         epoch = self.n_epoch - 1
         characters = []
         outs = []
+        save_batch = list()
+        save_batch_data(save_data_path, save_batch, is_New=True)
         for batch in range(n_batch):
             batch_x = x[batch * self.batch_size:(batch + 1) * self.batch_size]
             _, loss, out, character, self.ewarray,self.ebarray, summ_loss,summ_ew,summ_eb,summ_db\
@@ -131,6 +150,13 @@ class DAE(object):
             summ_writer.add_summary(summ_ew, epoch * n_batch + batch)
             summ_writer.add_summary(summ_eb, epoch * n_batch + batch)
             summ_writer.add_summary(summ_db, epoch * n_batch + batch)
+            # 各个batch的特征图都要存下来。也可以每几个batch存一次。imsave函数可能要挪进来
+            if batch % self.load_freq == 0:
+                if len(save_batch)>0:
+                    img = np.concatenate(tuple(save_batch))
+                    save_batch_data(save_data_path,img,is_New=False)
+                save_batch =list()
+            save_batch.append(character)
             characters.append(character)
             outs.append(out)
         self.next_x = np.concatenate(tuple(characters))
