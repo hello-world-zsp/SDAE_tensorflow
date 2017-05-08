@@ -1,3 +1,4 @@
+# -*- coding: utf8 -*-
 import tensorflow as tf
 from utils import *
 import time
@@ -7,7 +8,7 @@ from scipy.misc import imsave
 class DAE(object):
     def __init__(self, sess, input_size, noise=0, units=20,layer=0, learning_rate=0.01,
                  n_epoch=100,is_training = True, input_dim = 1,batch_size = 20,decay=0.95,
-                 summary_handle = None):
+                 reg_lambda = 0.0,rho = 0.05,sparse_lambda=1.0,summary_handle = None):
 
         self.sess = sess
         self.is_training = is_training
@@ -21,8 +22,10 @@ class DAE(object):
         self.lr_init = learning_rate
         self.stddev = 0.2                   # 初始化参数用的
         self.noise = noise                  # dropout水平，是数\
-        self.reg_lambda = 0.0                  # 正则化系数,float
+        self.reg_lambda = reg_lambda               # 正则化系数,float
         self.dropout_p = 0.5                # dropout层保持概率
+        self.rho = rho                      # 稀疏性系数
+        self.sparse_lambda = sparse_lambda
         self.lr_decay = decay
         self.change_lr_epoch = int(n_epoch*0.3) # 开始改变lr的epoch数
 
@@ -77,13 +80,14 @@ class DAE(object):
                                                 name = layer_name)
 
         reg_losses = tf.losses.get_regularization_losses(layer_name)
-        # reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
         for loss in reg_losses:
             tf.add_to_collection('losses' + layer_name, loss)
         self.reg_losses = tf.get_collection('losses'+layer_name)
 
         mse_loss = mse(self.out, self.x)
         tf.add_to_collection('losses'+layer_name, mse_loss)
+        self.sparse_loss = self.sparse_lambda * sparse_loss(self.rho,self.character)
+        tf.add_to_collection('losses' + layer_name, self.sparse_loss)
         self.loss = tf.add_n(tf.get_collection('losses'+layer_name))
 
     def train(self, x, train_vals, summ_writer, summ_handle):
@@ -104,9 +108,9 @@ class DAE(object):
             for batch in range(n_batch):
                 counter += 1
                 batch_x = x[batch*self.batch_size:(batch+1)*self.batch_size]
-                _, loss, reg_loss, out, summ_loss= self.sess.run([self.optimizer, self.loss,self.reg_losses, self.out,
-                                                                 summ_handle.summ_loss[0]],
-                                                                feed_dict={self.x: batch_x, self.lr:current_lr})
+                _, loss, reg_loss, re_sparse_loss, out,  character, summ_loss =\
+                    self.sess.run([self.optimizer,self.loss,self.reg_losses, self.sparse_loss,self.out,
+                                    self.character,summ_handle.summ_loss[0]],feed_dict={self.x: batch_x, self.lr:current_lr})
                 summ_writer.add_summary(summ_loss,epoch * n_batch + batch)
                 if counter%50==0:
                 # 记录w,b
@@ -116,7 +120,9 @@ class DAE(object):
                     summ_writer.add_summary(summ_ew, epoch * n_batch + batch)
                     summ_writer.add_summary(summ_eb, epoch * n_batch + batch)
                     summ_writer.add_summary(summ_db, epoch * n_batch + batch)
-            print("epoch ",epoch," train loss: ", loss," reg loss: ",reg_loss, " time:",str(time.time()-begin_time))
+            print("epoch ",epoch," train loss: ", loss," reg loss: ",reg_loss," sparse loss: ",re_sparse_loss,
+                      " sparse coef: ",tf.reduce_mean(tf.reduce_mean(character)).eval(),
+                        " time:",str(time.time()-begin_time))
 
         #----------- 最后一个epoch,除了训练，还要获取下一层训练的特征图，记录wb的分布 ------
         epoch = self.n_epoch - 1
@@ -124,7 +130,7 @@ class DAE(object):
         outs = []
         for batch in range(n_batch):
             batch_x = x[batch * self.batch_size:(batch + 1) * self.batch_size]
-            _, loss, out, character, self.ewarray,self.ebarray, summ_loss,summ_ew,summ_eb,summ_db\
+            _, loss, out, character, self.ewarray, self.ebarray, summ_loss, summ_ew,summ_eb,summ_db\
                 = self.sess.run([self.optimizer, self.loss, self.out,self.character,self.ew,self.eb,
                                 summ_handle.summ_loss[0],summ_handle.summ_enc_w[0],summ_handle.summ_enc_b[0],
                                 summ_handle.summ_dec_b[0]],

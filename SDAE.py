@@ -1,3 +1,4 @@
+# -*- coding: utf8 -*-
 import os
 import tensorflow as tf
 from utils import *
@@ -18,8 +19,9 @@ class SummaryHandle():
 
 class SDAE(object):
     def __init__(self, sess, input_size, noise=0, n_nodes=(180, 42, 10), learning_rate=1,
-                 n_epochs=100,is_training = True, input_dim = 1,
-                 lambda1 = (.4, .05, .05),data_dir = None,batch_size = 20,num_show = 100):
+                 n_epochs=100, is_training = True, use_sparse_loss = True,input_dim = 1,
+                 data_dir = None,batch_size = 20,num_show = 100,rho = (0.05,0.05,0.05),
+                 reg_lambda = 0.0,sparse_lambda =1.0):
 
         self.sess = sess
         self.is_training = is_training
@@ -31,9 +33,11 @@ class SDAE(object):
         self.input_dim = input_dim          # 输入是几通道，rgb是3
 
         self.lr = learning_rate
-        self.lambda1 = lambda1              # 还没用
         self.stddev = 0.02                  # 初始化参数用的
         self.noise = noise                  # dropout水平，是tuple
+        self.rho = rho                      # 各层稀疏性系数
+        self.sparse_lambda = sparse_lambda  # 稀疏loss权重
+        self.reg_lambda = reg_lambda        # 正则项权重
 
         self.checkpoint_dir = 'checkpoint'
         self.result_dir = 'results'
@@ -58,6 +62,7 @@ class SDAE(object):
             layer = DAE(self.sess, n_input[i], noise=self.noise[i],units=self.n_nodes[i],
                         layer=i, n_epoch=self.n_epochs[i], is_training=self.is_training,
                         input_dim=self.input_dim, batch_size=self.batch_size,learning_rate=self.lr[i],
+                        rho=self.rho[i],reg_lambda=self.reg_lambda,sparse_lambda=self.sparse_lambda,
                         summary_handle = summary_handle)
             self.loss.append(layer.loss)
             self.hidden_layers.append(layer)
@@ -99,11 +104,6 @@ class SDAE(object):
 
             save_image(layer.rec,name = self.result_dir+'/rec'+str(idx)+'.png',n_show = self.n_show)
             features.append(layer.next_x)
-            # if idx == 0:
-            #     imgs.append(np.transpose(layer.features))
-            # else:
-            #     imgs.append(np.dot(np.transpose(layer.features),imgs[idx-1]))
-            # save_image(imgs[idx], name=self.result_dir + '/feature' + str(idx) + '.png', n_show=self.n_nodes[idx])
             if idx == 0:
                 img = np.add(layer.ewarray.T,
                                    np.dot(layer.ebarray.T,np.ones([1,self.input_size])))

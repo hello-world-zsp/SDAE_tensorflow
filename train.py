@@ -17,12 +17,14 @@ flags = tf.app.flags
 sdae_args = {
         "noise"     : .1,
         "n_nodes"   : (225, 100, 49),
-        "learning_rate": (.01,0.01,0.001),
+        "learning_rate": (.01, 0.01, 0.001),
         "n_epochs"  : (300, 150, 150),
         "data_dir": 'data',
-        "lambda1"   : (.4, .05, .05),
         "batch_size": 50,
-        "num_show"  :100
+        "num_show"  :100,
+        "rho"       :(0.05, 0.02, 0.05),
+        "reg_lambda":0.0,
+        "sparse_lambda":1
 }
 
 mlp_args = {
@@ -42,7 +44,7 @@ def main():
         k, v = arg.split('=', 1)
         sdae_args[k] = ast.literal_eval(v)
 
-    for k in ('learning_rate', 'n_epochs', 'n_nodes', 'noise', 'lambda1'):
+    for k in ('learning_rate', 'n_epochs', 'n_nodes', 'noise', 'rho'):
         sdae_args[k] = solo_to_tuple(sdae_args[k])
     for k in ('learning_rate', 'n_epochs', 'n_nodes', 'noise'):
         mlp_args[k] = solo_to_tuple(mlp_args[k])
