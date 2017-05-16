@@ -90,7 +90,7 @@ class DAE(object):
         tf.add_to_collection('losses' + layer_name, self.sparse_loss)
         self.loss = tf.add_n(tf.get_collection('losses'+layer_name))
 
-    def train(self, x, train_vals, summ_writer, summ_handle):
+    def train(self, x, valx, train_vals, summ_writer, summ_handle):
         temp = set(tf.all_variables())
         self.optimizer = tf.train.AdamOptimizer(self.lr, beta1=0.9).minimize(self.loss,var_list=train_vals)
         # adam中有slot,需要初始化。
@@ -141,9 +141,19 @@ class DAE(object):
             summ_writer.add_summary(summ_db, epoch * n_batch + batch)
             characters.append(character)
             outs.append(out)
+        print("epoch ", epoch, " train loss: ", loss, " time:", str(time.time() - begin_time))
+        # ------------------- validation ------------------------------------------
+        n_batch_val = len(valx)//self.batch_size
+        val_characters =[]
+        for batch in range(n_batch_val):
+            batch_x = valx[batch * self.batch_size:(batch + 1) * self.batch_size]
+            loss, val_character = self.sess.run([self.loss, self.character],
+                                feed_dict={self.x: batch_x, self.lr:current_lr})
+            val_characters.append(val_character)
         self.next_x = np.concatenate(tuple(characters))
+        self.next_x_val = np.concatenate(tuple(val_characters))
         self.rec = np.concatenate(tuple(outs))
-        print("epoch ", epoch, " train loss: ", loss, " time:",str(time.time()-begin_time))
+        print("val loss: ", loss, " time:", str(time.time() - begin_time))
         # -------------------------------------------------------------------
 
 

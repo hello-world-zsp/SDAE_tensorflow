@@ -2,7 +2,8 @@
 
 import numpy as np
 from tensorflow.examples.tutorials.mnist import input_data
-import pickle
+import csv
+from sklearn.preprocessing import normalize
 
 
 def load_data(path,shuffle=False):
@@ -55,3 +56,30 @@ def load_data_zi(path,shuffle=False,val_ratio=0.8):
     trainX = X[:np.round(val_ratio*X.shape[0])]
     valX = X[np.round(val_ratio * X.shape[0]):]
     return trainX, valX
+
+
+def load_goods_data(train_ratio = 0.9, shuffle=True, use_cat = True):
+    X=np.loadtxt(open("./data/goods_vectors_new.csv","rb"),delimiter=",",skiprows=0)
+    if use_cat:
+        X = X[:,3:]     # 前3列是id，后15列是one-hot的分类信息
+    else:
+        Y = X[:, -15:]
+        X = X[:, 3:-15]
+    nan_loc = np.argwhere(np.isnan(X))
+    if len(nan_loc)>0:
+        X = np.delete(X,nan_loc[0],axis=0)
+
+    X = normalize(X,axis=1)
+    if shuffle:
+        idx = np.random.permutation(X.shape[0])
+        X = X[idx,:]
+        Y = Y[idx,:]
+    else :
+        idx = range(len(X))
+    trainX = X[:np.round(train_ratio * X.shape[0])]
+    trainidx = idx[:np.round(train_ratio * X.shape[0])]
+    trainY = Y[:np.round(train_ratio * X.shape[0])]
+    valX = X[np.round(train_ratio * X.shape[0]):]
+    validx = idx[np.round(train_ratio * X.shape[0]):]
+    valY = Y[np.round(train_ratio * X.shape[0]):]
+    return trainX,valX,trainidx,validx,trainY,valY

@@ -19,7 +19,7 @@ class SummaryHandle():
 
 class SDAE(object):
     def __init__(self, sess, input_size, noise=0, n_nodes=(180, 42, 10), learning_rate=1,
-                 n_epochs=100, is_training = True, use_sparse_loss = True,input_dim = 1,
+                 n_epochs=100, is_training = True,input_dim = 1,
                  data_dir = None,batch_size = 20,num_show = 100,rho = (0.05,0.05,0.05),
                  reg_lambda = 0.0,sparse_lambda =1.0):
 
@@ -84,12 +84,14 @@ class SDAE(object):
         self.writer = tf.summary.FileWriter('./'+self.log_dir, self.sess.graph)
 
         input = x
+        inputVal = valx
         if shuffle:
             r = np.random.permutation(len(x))
             input = x[r,:]
         # 保存原图
-        save_image(input, name=self.result_dir + '/original' + str(0) + '.png', n_show=self.n_show)
+        # save_image(input, name=self.result_dir + '/original' + str(0) + '.png', n_show=self.n_show)
         features = []
+        val_features = []
         imgs = []
 
         for layer in self.hidden_layers:
@@ -97,13 +99,15 @@ class SDAE(object):
             print("training layer: ",idx )
             # layer.train(input,self.train_vals_layer[idx],
             #             summ_writer=self.writer,summ_loss=self.summary_loss[idx])
-            layer.train(input, self.train_vals_layer[idx],
+            layer.train(input,inputVal, self.train_vals_layer[idx],
                         summ_writer=self.writer, summ_handle=self.summary_handles[idx])
             input = layer.next_x
+            inputVal = layer.next_x_val
             # 保存重建图
 
-            save_image(layer.rec,name = self.result_dir+'/rec'+str(idx)+'.png',n_show = self.n_show)
+            # save_image(layer.rec,name = self.result_dir+'/rec'+str(idx)+'.png',n_show = self.n_show)
             features.append(layer.next_x)
+            val_features.append(layer.next_x_val)
             if idx == 0:
                 img = np.add(layer.ewarray.T,
                                    np.dot(layer.ebarray.T,np.ones([1,self.input_size])))
@@ -112,9 +116,10 @@ class SDAE(object):
                                    np.dot(layer.ebarray.T, np.ones([1, self.input_size])))
             img = tf.sigmoid(img).eval()
             imgs.append(img)
-            save_image(imgs[idx], name=self.result_dir + '/feature' + str(idx) + '.png', n_show=self.n_nodes[idx])
-            save_image(tf.sigmoid(layer.next_x).eval(), name=self.result_dir + '/character' + str(idx) + '.png', n_show=self.n_show)
+            # save_image(imgs[idx], name=self.result_dir + '/feature' + str(idx) + '.png', n_show=self.n_nodes[idx])
+            # save_image(tf.sigmoid(layer.next_x).eval(), name=self.result_dir + '/character' + str(idx) + '.png', n_show=self.n_show)
         features = np.concatenate(tuple(features[1:]),axis = 1)
-        return features
+        val_features = np.concatenate(tuple(val_features[1:]), axis=1)
+        return features,val_features
 
 

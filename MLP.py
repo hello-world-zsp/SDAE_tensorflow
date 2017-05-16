@@ -1,3 +1,4 @@
+# -*- coding: utf8 -*-
 import os
 import tensorflow as tf
 from utils import *
@@ -83,8 +84,8 @@ class MLP(object):
         # ------------------------ 定义loss --------------------------------------------
         self.loss1 = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
                                     labels=self.y,logits=self.enc_out))
-        self.loss2 = mse(self.rec,self.x)
-        self.loss = self.loss1 + self.loss2
+        # self.loss2 = mse(self.rec,self.x)
+        self.loss = self.loss1
         # ------------------------------------------------------------------------------
         # ------------------------ 提取各层可训练参数 -----------------------------------
         self.train_vals = tf.trainable_variables()
